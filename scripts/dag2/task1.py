@@ -1,15 +1,28 @@
 import requests
 import json
-from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, text
+from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import urllib3
+import argparse
 
-# Отключаем предупреждение о небезопасном HTTPS
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- Данные прокси ---
+parser = argparse.ArgumentParser()
+parser.add_argument("--host", dest="host")
+parser.add_argument("--dbname", dest="dbname")
+parser.add_argument("--user", dest="user")
+parser.add_argument("--jdbc_password", dest="jdbc_password")
+parser.add_argument("--port", dest="port", default='5432')
+args = parser.parse_args()
+
+print('host =', args.host)
+print('dbname =', args.dbname)
+print('user =', args.user)
+print('jdbc_password =', args.jdbc_password)
+print('port =', args.port)
+
 proxy_host = "209.127.25.129"
 proxy_port = "8000"
 proxy_user = "ssb3FS"
@@ -36,47 +49,33 @@ headers = {
 
 url = 'https://api.cryptorank.io/v0/coins/historical-prices?keys=bitcoin,ethereum,ripple,tether,bnb,solana,usdcoin,dogecoin,lido-staked-ether,tron,cardano'
 
-# --- Настройка SQLAlchemy ---
-# Формируем URL подключения к БД
-# Формат: dialect+driver://username:password@host:port/database
-DATABASE_URL = "postgresql://airflow1:qwerty12345@95.128.157.141:5432/crypto_data"
-# Создаем движок SQLAlchemy
-engine = create_engine(DATABASE_URL, echo=False) # echo=True для логгирования SQL запросов
+DATABASE_URL = f"postgresql://{args.user}:{args.jdbc_password}@{args.host}:{args.port}/{args.dbname}"
 
-# Создаем базовый класс для моделей
+engine = create_engine(DATABASE_URL, echo=False)
 Base = declarative_base()
-
-# Создаем сессию
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# --- Определение модели таблицы ---
-class CryptoPrice(Base):
-    __tablename__ = "crypto_prices"
+class CryptoPrice2(Base):
+    __tablename__ = "crypto_prices_2"
 
-    id = Column(Integer, primary_key=True, index=True) # Добавлено поле id
+    id = Column(Integer, primary_key=True, index=True)
     token_name = Column(String, index=True)
     currency = Column(String, index=True)
     period = Column(String, index=True)
     price = Column(Float)
-    volatility = Column(Float, nullable=True) # Добавлено поле volatility
+    volatility = Column(Float, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow)
 
     def __repr__(self):
-        return f"<CryptoPrice(token_name='{self.token_name}', currency='{self.currency}', period='{self.period}', price={self.price})>"
+        return f"<CryptoPrice2(token_name='{self.token_name}', currency='{self.currency}', period='{self.period}', price={self.price})>"
 
-# --- Создание таблицы (если её ещё нет) ---
-# Это создаст таблицу в БД, если она не существует, основываясь на модели выше.
-# В production среде лучше использовать миграции (например, Alembic).
 Base.metadata.create_all(bind=engine)
 
-# --- Основная логика ---
 def main():
-    # Создаем сессию
     db = SessionLocal()
     try:
-        print("✅ Успешно подключено к БД через SQLAlchemy")
+        print("✅ Connected to DB")
 
-        # --- Запрос к API ---
         response = requests.get(url, headers=headers, verify=False, timeout=30, proxies=proxies)
 
         if response.status_code == 200:
@@ -86,7 +85,6 @@ def main():
                 objects_to_insert = []
 
                 for token_name, token_data in data['data'].items():
-                    # Получаем волатильность
                     volatility_data = token_data.get('volatility', {})
                     volatility_usd = volatility_data.get('USD')
                     volatility_btc = volatility_data.get('BTC')
@@ -97,9 +95,8 @@ def main():
                         btc_price = prices.get('BTC')
                         eth_price = prices.get('ETH')
 
-                        # Создаем объекты модели для каждой записи
                         if usd_price is not None:
-                            objects_to_insert.append(CryptoPrice(
+                            objects_to_insert.append(CryptoPrice2(
                                 token_name=token_name,
                                 currency='USD',
                                 period=period,
@@ -107,7 +104,7 @@ def main():
                                 volatility=volatility_usd
                             ))
                         if btc_price is not None:
-                            objects_to_insert.append(CryptoPrice(
+                            objects_to_insert.append(CryptoPrice2(
                                 token_name=token_name,
                                 currency='BTC',
                                 period=period,
@@ -115,7 +112,7 @@ def main():
                                 volatility=volatility_btc
                             ))
                         if eth_price is not None:
-                            objects_to_insert.append(CryptoPrice(
+                            objects_to_insert.append(CryptoPrice2(
                                 token_name=token_name,
                                 currency='ETH',
                                 period=period,
@@ -123,32 +120,26 @@ def main():
                                 volatility=volatility_eth
                             ))
 
-                #_bulk_save_objects или bulk_insert_mappings могут быть эффективнее,
-                # но add_all проще для начала
                 if objects_to_insert:
                     db.add_all(objects_to_insert)
                     db.commit()
-                    print(f"✅ Успешно записано {len(objects_to_insert)} строк в БД через SQLAlchemy.")
+                    print(f"✅ Inserted {len(objects_to_insert)} rows into crypto_prices_2")
                 else:
-                    print("🟡 Нет данных для вставки.")
-        # изменение 2
+                    print("🟡 No data to insert")
+
             else:
-                print("❌ Ключ 'data' не найден в ответе.")
-                print("Ответ:", response.text[:500])
+                print("❌ Key 'data' not found in response")
+                print("Response snippet:", response.text[:500])
 
         else:
-            print(f"❌ Ошибка запроса: {response.status_code}")
-            print("Ответ:", response.text[:500])
+            print(f"❌ Request error: {response.status_code}")
+            print("Response snippet:", response.text[:500])
 
-    except json.JSONDecodeError as e:
-        print(f"❌ Ошибка парсинга JSON: {e}")
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Ошибка запроса: {e}")
-    except Exception as e: # Перехватываем общие исключения SQLAlchemy
-        print(f"❌ Ошибка SQLAlchemy: {e}")
+    except Exception as e:
+        print(f"❌ Exception: {e}")
         db.rollback()
     finally:
-        db.close() # Закрываем сессию
+        db.close()
 
 if __name__ == "__main__":
     main()
