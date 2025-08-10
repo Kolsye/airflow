@@ -3,7 +3,7 @@ from airflow.models import DAG
 from airflow.operators.bash import BashOperator
 from airflow.hooks.base_hook import BaseHook
 
-connection = BaseHook.get_connection("my_test_postgre_connectoin")
+connection = BaseHook.get_connection("my_test_postgre_connection")
 
 default_args = {
     "owner": "etl_user2",
